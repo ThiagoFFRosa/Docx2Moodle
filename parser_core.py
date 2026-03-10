@@ -273,7 +273,28 @@ TABULAR_HEADER_PATTERNS = [
     r"xi",
     r"fi",
     r"total",
+    r"nota\s*phea",
+    r"distribui[çc][ãa]o\s+de\s+frequ[êe]ncias",
+    r"frequ[êe]ncia\s+absoluta",
+    r"frequ[êe]ncia\s+acumulada",
     r"fonte\s*:",
+]
+
+TABULAR_BLOCK_KEYWORDS = [
+    "abaixo temos",
+    "distribuição de frequências",
+    "distribuicao de frequencias",
+    "xi representa",
+    "aluno",
+    "nota phea",
+    "fonte:",
+    "dados obtidos foram tabelados abaixo",
+    "frequência",
+    "frequencia",
+    "frequência absoluta",
+    "frequencia absoluta",
+    "frequência acumulada",
+    "frequencia acumulada",
 ]
 
 
@@ -299,38 +320,106 @@ def _contains_tabular_pattern(text: str) -> bool:
     if len(lines) < 4:
         return False
 
-    short_lines = sum(1 for line in lines if len(line) <= 22)
+    short_lines = sum(1 for line in lines if len(line) <= 25)
     numeric_lines = sum(1 for line in lines if _is_mostly_numeric_line(line))
+    only_number_lines = sum(1 for line in lines if re.fullmatch(r"\d+(?:[.,]\d+)?", line))
     header_lines = 0
     label_value_switches = 0
+    consecutive_short_runs = 0
+    consecutive_numeric_runs = 0
+    header_numeric_switches = 0
     has_fonte = False
+
+    known_headers = {
+        "aluno",
+        "nota phea",
+        "xi",
+        "fi",
+        "total",
+        "frequência",
+        "frequencia",
+        "frequência absoluta",
+        "frequencia absoluta",
+        "frequência acumulada",
+        "frequencia acumulada",
+    }
+
+    short_streak = 0
+    numeric_streak = 0
+    known_header_hits = set()
 
     for idx, line in enumerate(lines):
         lower = line.lower()
+
+        if len(line) <= 25:
+            short_streak += 1
+        else:
+            if short_streak >= 4:
+                consecutive_short_runs += 1
+            short_streak = 0
+
+        is_numeric_line = _is_mostly_numeric_line(line)
+        if is_numeric_line:
+            numeric_streak += 1
+        else:
+            if numeric_streak >= 3:
+                consecutive_numeric_runs += 1
+            numeric_streak = 0
+
         if any(re.search(rf"\b{pattern}\b", lower, re.I) for pattern in TABULAR_HEADER_PATTERNS):
             header_lines += 1
+
+        if lower in known_headers:
+            known_header_hits.add(lower)
+
         if re.search(r"\bfonte\s*:", lower):
             has_fonte = True
 
         if idx > 0:
             prev_numeric = _is_mostly_numeric_line(lines[idx - 1])
-            cur_numeric = _is_mostly_numeric_line(line)
-            if prev_numeric != cur_numeric:
+            if prev_numeric != is_numeric_line:
                 label_value_switches += 1
+
+            prev_lower = lines[idx - 1].lower()
+            if (prev_lower in known_headers and is_numeric_line) or (
+                lower in known_headers and prev_numeric
+            ):
+                header_numeric_switches += 1
+
+    if short_streak >= 4:
+        consecutive_short_runs += 1
+    if numeric_streak >= 3:
+        consecutive_numeric_runs += 1
 
     score = 0
     if short_lines >= 5:
         score += 1
+    if consecutive_short_runs >= 1:
+        score += 1
     if numeric_lines >= 3:
+        score += 1
+    if only_number_lines >= 3:
+        score += 1
+    if consecutive_numeric_runs >= 1:
         score += 1
     if header_lines >= 2:
         score += 2
+    if len(known_header_hits) >= 2:
+        score += 2
+    if {"aluno", "nota phea"}.issubset(known_header_hits):
+        score += 2
+    if {"xi", "fi"}.issubset(known_header_hits):
+        score += 2
+    if "total" in known_header_hits:
+        score += 1
     if label_value_switches >= 4:
+        score += 1
+    if header_numeric_switches >= 2:
         score += 1
     if has_fonte:
         score += 1
 
-    return score >= 3
+    return score >= 4
 
 
 def _question_discard_reason(enunciado: str) -> str | None:
@@ -378,6 +467,12 @@ def _question_discard_reason(enunciado: str) -> str | None:
     if "tabela" in t:
         return "referencia_tabela"
 
+    for keyword in TABULAR_BLOCK_KEYWORDS:
+        if keyword in t:
+            if _contains_tabular_pattern(enunciado):
+                return f"tabular_keyword+heuristica:{keyword}"
+            return f"tabular_keyword:{keyword}"
+
     if any(re.search(rf"\b{pattern}\b", t, re.I) for pattern in TABULAR_HEADER_PATTERNS):
         if _contains_tabular_pattern(enunciado):
             return "bloco_tabular_por_cabecalhos"
@@ -388,8 +483,13 @@ def _question_discard_reason(enunciado: str) -> str | None:
     return None
 
 
+def _question_discard_info(enunciado: str) -> tuple[bool, str | None]:
+    reason = _question_discard_reason(enunciado)
+    return reason is not None, reason
+
+
 def _question_should_be_discarded(enunciado: str) -> bool:
-    return _question_discard_reason(enunciado) is not None
+    return _question_discard_info(enunciado)[0]
 
 
 def extract_blocks_from_rows(table):
@@ -654,8 +754,7 @@ def parse_docx_questions(docx_path: str):
             alternativas=alternativas_sanitizadas,
         )
 
-        discard_reason = _question_discard_reason(enunciado_sanitizado)
-        discarded = discard_reason is not None
+        discarded, discard_reason = _question_discard_info(enunciado_sanitizado)
 
         questoes.append({
             "seq": seq,
