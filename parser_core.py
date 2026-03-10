@@ -259,44 +259,88 @@ def row_join_nonempty(vals):
     return "\n".join(v for v in vals if norm_ws(v)).strip()
 
 
+TABULAR_HEADER_PATTERNS = [
+    r"item",
+    r"valor(?:\s*\([^)]*\))?",
+    r"tempo(?:\s*\([^)]*\))?",
+    r"n\.?\s*[º°o]?\s*de\s*pacientes",
+    r"frequ[êe]ncia(?:\s+absoluta|\s+acumulada)?",
+    r"aluno",
+    r"nota",
+    r"ve[íi]culo",
+    r"peso",
+    r"consumo(?:\s+de\s+energia)?",
+    r"xi",
+    r"fi",
+    r"total",
+    r"fonte\s*:",
+]
+
+
+def _is_mostly_numeric_line(line: str) -> bool:
+    nums = re.findall(r"\d+(?:[.,]\d+)?", line)
+    if not nums:
+        return False
+    stripped = re.sub(r"\d+(?:[.,]\d+)?", "", line)
+    stripped = re.sub(r"[%R$()\-–—/:;,.\s]", "", stripped)
+    return len(stripped) <= 2
+
+
 def _contains_tabular_pattern(text: str) -> bool:
     """
     Detecta indícios de questão dependente de tabela/listagem tabular.
+    Heurística por sinais combinados para capturar blocos em linhas quebradas.
     """
     t = clean_text(text)
     if not t:
         return False
 
     lines = [norm_ws(x) for x in t.split("\n") if norm_ws(x)]
-    if not lines:
+    if len(lines) < 4:
         return False
 
-    short_lines = sum(1 for line in lines if len(line) <= 25)
+    short_lines = sum(1 for line in lines if len(line) <= 22)
+    numeric_lines = sum(1 for line in lines if _is_mostly_numeric_line(line))
+    header_lines = 0
+    label_value_switches = 0
+    has_fonte = False
 
-    has_numeric_grid = 0
-    for line in lines:
-        if re.search(r"\btotal\b", line, re.I):
-            has_numeric_grid += 1
-        if re.search(r"\d+\s*$", line):
-            has_numeric_grid += 1
-        if re.search(
-            r"\b(?:tempo|valor|item|pacientes|frequência|aluno|nota|veículo|peso|consumo|classe|intervalo|salário|idade|número de filhos|x|y)\b",
-            line,
-            re.I,
-        ):
-            has_numeric_grid += 1
+    for idx, line in enumerate(lines):
+        lower = line.lower()
+        if any(re.search(rf"\b{pattern}\b", lower, re.I) for pattern in TABULAR_HEADER_PATTERNS):
+            header_lines += 1
+        if re.search(r"\bfonte\s*:", lower):
+            has_fonte = True
 
-    return short_lines >= 4 and has_numeric_grid >= 3
+        if idx > 0:
+            prev_numeric = _is_mostly_numeric_line(lines[idx - 1])
+            cur_numeric = _is_mostly_numeric_line(line)
+            if prev_numeric != cur_numeric:
+                label_value_switches += 1
+
+    score = 0
+    if short_lines >= 5:
+        score += 1
+    if numeric_lines >= 3:
+        score += 1
+    if header_lines >= 2:
+        score += 2
+    if label_value_switches >= 4:
+        score += 1
+    if has_fonte:
+        score += 1
+
+    return score >= 3
 
 
-def _question_should_be_discarded(enunciado: str) -> bool:
+def _question_discard_reason(enunciado: str) -> str | None:
     """
     Marca como lixo questões que dependem de elementos não textuais
     ou estrutura tabular que não deve ser convertida automaticamente.
     """
     t = clean_text(enunciado).lower()
     if not t:
-        return True
+        return "enunciado_vazio"
 
     gatilhos_lixo = [
         "tabela abaixo",
@@ -318,18 +362,34 @@ def _question_should_be_discarded(enunciado: str) -> bool:
         "analise o gráfico",
         "analise a figura",
         "analise a tabela",
+        "abaixo temos os dados",
+        "os dados obtidos foram tabelados abaixo",
+        "urna abaixo",
+        "dados foram tabelados",
     ]
 
-    if any(g in t for g in gatilhos_lixo):
-        return True
+    for gatilho in gatilhos_lixo:
+        if gatilho in t:
+            return f"gatilho_textual:{gatilho}"
 
     if any(p in t for p in ["gráfico", "imagem", "figura", "mapa", "quadro"]):
-        return True
+        return "referencia_visual_generica"
+
+    if "tabela" in t:
+        return "referencia_tabela"
+
+    if any(re.search(rf"\b{pattern}\b", t, re.I) for pattern in TABULAR_HEADER_PATTERNS):
+        if _contains_tabular_pattern(enunciado):
+            return "bloco_tabular_por_cabecalhos"
 
     if _contains_tabular_pattern(enunciado):
-        return True
+        return "bloco_tabular_heuristica"
 
-    return False
+    return None
+
+
+def _question_should_be_discarded(enunciado: str) -> bool:
+    return _question_discard_reason(enunciado) is not None
 
 
 def extract_blocks_from_rows(table):
@@ -594,7 +654,8 @@ def parse_docx_questions(docx_path: str):
             alternativas=alternativas_sanitizadas,
         )
 
-        discarded = _question_should_be_discarded(enunciado_sanitizado)
+        discard_reason = _question_discard_reason(enunciado_sanitizado)
+        discarded = discard_reason is not None
 
         questoes.append({
             "seq": seq,
@@ -608,6 +669,7 @@ def parse_docx_questions(docx_path: str):
             "gabarito": gabarito,
             "justificativa": _sanitize_moodle_text(justificativa),
             "discarded": discarded,
+            "discard_reason": discard_reason,
         })
 
     return questoes
