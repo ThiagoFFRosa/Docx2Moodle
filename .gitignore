@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.env
+.venv/
+node_modules/
+tmp/
+*.xml
+*.log
+bkp/
+howto.txt
+requirements.txt
