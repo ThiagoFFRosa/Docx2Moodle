@@ -71,6 +71,7 @@ def api_parse():
         "count": len(questoes_visiveis),
         "discarded_count": len(questoes_descartadas),
         "questoes": questoes_visiveis,
+        "questoes_descartadas": questoes_descartadas,
     })
 
 @app.post("/api/export")
