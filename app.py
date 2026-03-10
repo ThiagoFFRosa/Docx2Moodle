@@ -17,7 +17,7 @@ app.config["UPLOAD_EXTENSIONS"] = [".docx"]
 TMP_DIR = Path(tempfile.gettempdir()) / "docx2moodle"
 TMP_DIR.mkdir(parents=True, exist_ok=True)
 
-# memstore simples: id -> lista de questões
+# memstore simples: id -> questões separadas por visibilidade
 MEM = {}
 
 @app.route("/")
@@ -55,9 +55,23 @@ def api_parse():
     if not questoes:
         return jsonify({"ok": False, "error": "Nenhuma questão encontrada. Confirme o padrão do DOCX."}), 200
 
+    questoes_visiveis = [q for q in questoes if not q.get("discarded")]
+    questoes_descartadas = [q for q in questoes if q.get("discarded")]
+
     doc_id = str(uuid.uuid4())
-    MEM[doc_id] = questoes
-    return jsonify({"ok": True, "doc_id": doc_id, "count": len(questoes), "questoes": questoes})
+    MEM[doc_id] = {
+        "all": questoes,
+        "visible": questoes_visiveis,
+        "discarded": questoes_descartadas,
+    }
+
+    return jsonify({
+        "ok": True,
+        "doc_id": doc_id,
+        "count": len(questoes_visiveis),
+        "discarded_count": len(questoes_descartadas),
+        "questoes": questoes_visiveis,
+    })
 
 @app.post("/api/export")
 def api_export():
@@ -81,7 +95,8 @@ def api_export():
             except:
                 pass
 
-    questoes = MEM[doc_id]
+    store = MEM[doc_id]
+    questoes = store["all"]
     tree = make_moodle_xml(questoes, mark_remove_set=mark_set, categoria=categoria)
 
     # 📤 retorna como arquivo XML para download
