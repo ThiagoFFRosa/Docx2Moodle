@@ -259,177 +259,44 @@ def row_join_nonempty(vals):
     return "\n".join(v for v in vals if norm_ws(v)).strip()
 
 
-TABULAR_HEADER_PATTERNS = [
-    r"item",
-    r"valor(?:\s*\([^)]*\))?",
-    r"tempo(?:\s*\([^)]*\))?",
-    r"n\.?\s*[º°o]?\s*de\s*pacientes",
-    r"frequ[êe]ncia(?:\s+absoluta|\s+acumulada)?",
-    r"aluno",
-    r"nota",
-    r"ve[íi]culo",
-    r"peso",
-    r"consumo(?:\s+de\s+energia)?",
-    r"xi",
-    r"fi",
-    r"total",
-    r"nota\s*phea",
-    r"distribui[çc][ãa]o\s+de\s+frequ[êe]ncias",
-    r"frequ[êe]ncia\s+absoluta",
-    r"frequ[êe]ncia\s+acumulada",
-    r"fonte\s*:",
-]
-
-TABULAR_BLOCK_KEYWORDS = [
-    "abaixo temos",
-    "distribuição de frequências",
-    "distribuicao de frequencias",
-    "xi representa",
-    "aluno",
-    "nota phea",
-    "fonte:",
-    "dados obtidos foram tabelados abaixo",
-    "frequência",
-    "frequencia",
-    "frequência absoluta",
-    "frequencia absoluta",
-    "frequência acumulada",
-    "frequencia acumulada",
-]
-
-
-def _is_mostly_numeric_line(line: str) -> bool:
-    nums = re.findall(r"\d+(?:[.,]\d+)?", line)
-    if not nums:
-        return False
-    stripped = re.sub(r"\d+(?:[.,]\d+)?", "", line)
-    stripped = re.sub(r"[%R$()\-–—/:;,.\s]", "", stripped)
-    return len(stripped) <= 2
-
-
 def _contains_tabular_pattern(text: str) -> bool:
     """
     Detecta indícios de questão dependente de tabela/listagem tabular.
-    Heurística por sinais combinados para capturar blocos em linhas quebradas.
     """
     t = clean_text(text)
     if not t:
         return False
 
     lines = [norm_ws(x) for x in t.split("\n") if norm_ws(x)]
-    if len(lines) < 4:
+    if not lines:
         return False
 
     short_lines = sum(1 for line in lines if len(line) <= 25)
-    numeric_lines = sum(1 for line in lines if _is_mostly_numeric_line(line))
-    only_number_lines = sum(1 for line in lines if re.fullmatch(r"\d+(?:[.,]\d+)?", line))
-    header_lines = 0
-    label_value_switches = 0
-    consecutive_short_runs = 0
-    consecutive_numeric_runs = 0
-    header_numeric_switches = 0
-    has_fonte = False
 
-    known_headers = {
-        "aluno",
-        "nota phea",
-        "xi",
-        "fi",
-        "total",
-        "frequência",
-        "frequencia",
-        "frequência absoluta",
-        "frequencia absoluta",
-        "frequência acumulada",
-        "frequencia acumulada",
-    }
+    has_numeric_grid = 0
+    for line in lines:
+        if re.search(r"\btotal\b", line, re.I):
+            has_numeric_grid += 1
+        if re.search(r"\d+\s*$", line):
+            has_numeric_grid += 1
+        if re.search(
+            r"\b(?:tempo|valor|item|pacientes|frequência|aluno|nota|veículo|peso|consumo|classe|intervalo|salário|idade|número de filhos|x|y)\b",
+            line,
+            re.I,
+        ):
+            has_numeric_grid += 1
 
-    short_streak = 0
-    numeric_streak = 0
-    known_header_hits = set()
-
-    for idx, line in enumerate(lines):
-        lower = line.lower()
-
-        if len(line) <= 25:
-            short_streak += 1
-        else:
-            if short_streak >= 4:
-                consecutive_short_runs += 1
-            short_streak = 0
-
-        is_numeric_line = _is_mostly_numeric_line(line)
-        if is_numeric_line:
-            numeric_streak += 1
-        else:
-            if numeric_streak >= 3:
-                consecutive_numeric_runs += 1
-            numeric_streak = 0
-
-        if any(re.search(rf"\b{pattern}\b", lower, re.I) for pattern in TABULAR_HEADER_PATTERNS):
-            header_lines += 1
-
-        if lower in known_headers:
-            known_header_hits.add(lower)
-
-        if re.search(r"\bfonte\s*:", lower):
-            has_fonte = True
-
-        if idx > 0:
-            prev_numeric = _is_mostly_numeric_line(lines[idx - 1])
-            if prev_numeric != is_numeric_line:
-                label_value_switches += 1
-
-            prev_lower = lines[idx - 1].lower()
-            if (prev_lower in known_headers and is_numeric_line) or (
-                lower in known_headers and prev_numeric
-            ):
-                header_numeric_switches += 1
-
-    if short_streak >= 4:
-        consecutive_short_runs += 1
-    if numeric_streak >= 3:
-        consecutive_numeric_runs += 1
-
-    score = 0
-    if short_lines >= 5:
-        score += 1
-    if consecutive_short_runs >= 1:
-        score += 1
-    if numeric_lines >= 3:
-        score += 1
-    if only_number_lines >= 3:
-        score += 1
-    if consecutive_numeric_runs >= 1:
-        score += 1
-    if header_lines >= 2:
-        score += 2
-    if len(known_header_hits) >= 2:
-        score += 2
-    if {"aluno", "nota phea"}.issubset(known_header_hits):
-        score += 2
-    if {"xi", "fi"}.issubset(known_header_hits):
-        score += 2
-    if "total" in known_header_hits:
-        score += 1
-    if label_value_switches >= 4:
-        score += 1
-    if header_numeric_switches >= 2:
-        score += 1
-    if has_fonte:
-        score += 1
-
-    return score >= 4
+    return short_lines >= 4 and has_numeric_grid >= 3
 
 
-def _question_discard_reason(enunciado: str) -> str | None:
+def _question_should_be_discarded(enunciado: str) -> bool:
     """
     Marca como lixo questões que dependem de elementos não textuais
     ou estrutura tabular que não deve ser convertida automaticamente.
     """
     t = clean_text(enunciado).lower()
     if not t:
-        return "enunciado_vazio"
+        return True
 
     gatilhos_lixo = [
         "tabela abaixo",
@@ -451,45 +318,18 @@ def _question_discard_reason(enunciado: str) -> str | None:
         "analise o gráfico",
         "analise a figura",
         "analise a tabela",
-        "abaixo temos os dados",
-        "os dados obtidos foram tabelados abaixo",
-        "urna abaixo",
-        "dados foram tabelados",
     ]
 
-    for gatilho in gatilhos_lixo:
-        if gatilho in t:
-            return f"gatilho_textual:{gatilho}"
+    if any(g in t for g in gatilhos_lixo):
+        return True
 
     if any(p in t for p in ["gráfico", "imagem", "figura", "mapa", "quadro"]):
-        return "referencia_visual_generica"
-
-    if "tabela" in t:
-        return "referencia_tabela"
-
-    for keyword in TABULAR_BLOCK_KEYWORDS:
-        if keyword in t:
-            if _contains_tabular_pattern(enunciado):
-                return f"tabular_keyword+heuristica:{keyword}"
-            return f"tabular_keyword:{keyword}"
-
-    if any(re.search(rf"\b{pattern}\b", t, re.I) for pattern in TABULAR_HEADER_PATTERNS):
-        if _contains_tabular_pattern(enunciado):
-            return "bloco_tabular_por_cabecalhos"
+        return True
 
     if _contains_tabular_pattern(enunciado):
-        return "bloco_tabular_heuristica"
+        return True
 
-    return None
-
-
-def _question_discard_info(enunciado: str) -> tuple[bool, str | None]:
-    reason = _question_discard_reason(enunciado)
-    return reason is not None, reason
-
-
-def _question_should_be_discarded(enunciado: str) -> bool:
-    return _question_discard_info(enunciado)[0]
+    return False
 
 
 def extract_blocks_from_rows(table):
@@ -754,7 +594,7 @@ def parse_docx_questions(docx_path: str):
             alternativas=alternativas_sanitizadas,
         )
 
-        discarded, discard_reason = _question_discard_info(enunciado_sanitizado)
+        discarded = _question_should_be_discarded(enunciado_sanitizado)
 
         questoes.append({
             "seq": seq,
@@ -768,7 +608,6 @@ def parse_docx_questions(docx_path: str):
             "gabarito": gabarito,
             "justificativa": _sanitize_moodle_text(justificativa),
             "discarded": discarded,
-            "discard_reason": discard_reason,
         })
 
     return questoes
