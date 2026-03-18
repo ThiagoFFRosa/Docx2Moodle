@@ -7,7 +7,20 @@ import os
 import tempfile
 from pathlib import Path
 
-from parser_core import parse_docx_questions, make_moodle_xml
+import parser_core
+
+parse_docx_questions = parser_core.parse_docx_questions
+make_moodle_xml = getattr(
+    parser_core,
+    "make_moodle_xml",
+    getattr(parser_core, "build_moodle_xml", None),
+)
+
+if make_moodle_xml is None:
+    raise ImportError(
+        "parser_core não expõe uma função de exportação XML. "
+        "Esperado: make_moodle_xml (ou build_moodle_xml para compatibilidade)."
+    )
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50MB
