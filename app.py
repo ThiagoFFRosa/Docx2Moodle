@@ -10,16 +10,37 @@ from pathlib import Path
 import parser_core
 
 parse_docx_questions = parser_core.parse_docx_questions
-make_moodle_xml = getattr(
-    parser_core,
-    "make_moodle_xml",
-    getattr(parser_core, "build_moodle_xml", None),
-)
+
+
+def _resolve_xml_exporter(module):
+    """
+    Resolve compativelmente o exportador de XML entre versões do parser_core.
+    """
+    candidates = [
+        "make_moodle_xml",
+        "build_moodle_xml",
+        "export_moodle_xml",
+        "to_moodle_xml",
+    ]
+    for name in candidates:
+        fn = getattr(module, name, None)
+        if callable(fn):
+            return fn
+    return None
+
+
+make_moodle_xml = _resolve_xml_exporter(parser_core)
 
 if make_moodle_xml is None:
+    available = sorted(
+        name
+        for name in dir(parser_core)
+        if name.endswith("xml") or name.endswith("moodle_xml")
+    )
     raise ImportError(
         "parser_core não expõe uma função de exportação XML. "
-        "Esperado: make_moodle_xml (ou build_moodle_xml para compatibilidade)."
+        "Esperado: make_moodle_xml (ou aliases compatíveis). "
+        f"Encontrado: {', '.join(available) if available else '(nenhuma função XML encontrada)'}"
     )
 
 app = Flask(__name__)
