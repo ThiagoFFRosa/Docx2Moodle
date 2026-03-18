@@ -680,3 +680,9 @@ def make_moodle_xml(
             etree.SubElement(fb, "text").text = ""
 
     return etree.ElementTree(quiz)
+
+
+# Aliases de compatibilidade entre versões/chamadores antigos.
+build_moodle_xml = make_moodle_xml
+export_moodle_xml = make_moodle_xml
+to_moodle_xml = make_moodle_xml
